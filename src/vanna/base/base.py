@@ -1400,7 +1400,7 @@ class VannaBase(ABC):
         self.run_sql = run_sql_duckdb
         self.run_sql_is_set = True
 
-    def connect_to_mssql(self, odbc_conn_str: str, **kwargs):
+    def connect_to_mssql(self, odbc_conn_str: str,charset_in='latin1',charset_out='utf-8',**kwargs):
         """
         Connect to a Microsoft SQL Server database. This is just a helper function to set [`vn.run_sql`][vanna.base.base.VannaBase.run_sql]
 
@@ -1435,6 +1435,27 @@ class VannaBase(ABC):
 
         engine = create_engine(connection_url, **kwargs)
 
+        # 2. 自訂 cursor 事件：撈到資料後先手動解碼
+        def receive_raw_bytes(conn, cursor_context, statement, parameters,
+                              context, executemany):
+          # 只對 SELECT 生效
+          if statement.strip().lower().startswith("select"):
+            # 把所有 bytes 欄位先 decode 一次
+            for row in cursor_context:
+              for idx, val in enumerate(row):
+                if isinstance(val, bytes):
+                  try:
+                    row[idx] = val.decode(charset_in).encode(
+                      charset_out).decode(charset_out)
+                  except UnicodeDecodeError:
+                    row[idx] = val.decode(charset_in, errors='replace')
+
+        from sqlalchemy import event
+
+        engine = create_engine(connection_url, **kwargs)
+        event.listen(engine, "before_cursor_execute", receive_raw_bytes)
+
+
         def run_sql_mssql(sql: str):
             # Execute the SQL statement and return the result as a pandas DataFrame
             with engine.begin() as conn:
@@ -1447,6 +1468,8 @@ class VannaBase(ABC):
         self.dialect = "T-SQL / Microsoft SQL Server"
         self.run_sql = run_sql_mssql
         self.run_sql_is_set = True
+
+
     def connect_to_presto(
         self,
         host: str,
